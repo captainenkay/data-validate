@@ -3,6 +3,7 @@ import { Card, CardBody, Button, Form, Input, Row, Col} from "reactstrap";
 import Web3 from 'web3';
 import DataValidate from '../../abis/DataValidate.json'
 import logodark from "../../assets/images/logo-dark.png"
+import {degrees, PDFDocument, rgb, StandardFonts } from 'pdf-lib'
 
 const ipfsClient = require('ipfs-http-client')
 const ipfs = ipfsClient({ host: 'ipfs.infura.io', port: '5001', protocol: 'https' })
@@ -56,7 +57,7 @@ class Dropzone extends Component{
       totalSupply: 0,
       hashes: [],
       transaction: [],
-      fileName: ''
+      fileName: '',
     };
   }
 
@@ -78,25 +79,49 @@ class Dropzone extends Component{
       alert("input file first")
       return
     }
-    ipfs.add(this.state.buffer, (error,result) => {
-      var ipfsResult = result[0].hash
-      for (let i = 0; i < this.state.hashes.length; i++){
-        if(ipfsResult === this.state.transaction[i].input){
-          if(this.state.account === this.state.transaction[i].address){
-            alert("exist file in blockchain and the owner is you")
+    if (this.state.fileName.split('.').pop() === "pdf"){
+      ipfs.add(this.state.buffer, (error,result) => {
+        const url = 'https:ipfs.infura.io/ipfs/' + result[0].hash
+        for (let i = 0; i < this.state.hashes.length; i++){
+          if(url === this.state.transaction[i].initialIpfs){
+            if(this.state.account === this.state.transaction[i].address){
+              alert("exist file in blockchain and the owner is you")
+              return
+            }
+            alert("exist file in blockchain and the owner is " + this.state.transaction[i].address)
             return
           }
-          alert("exist file in blockchain and the owner is " + this.state.transaction[i].address)
+        }
+        if(error){
+          console.log(error)
           return
         }
-      }
-      if(error){
-        console.log(error)
+        alert("file valid")
         return
-      }
-      alert("file valid")
-      return
-    })
+      })
+    }
+
+    if (this.state.fileName.split('.').pop() === "png" || this.state.fileName.split('.').pop() === "jpg"){
+      ipfs.add(this.state.buffer, (error,result) => {
+        var ipfsResult = result[0].hash
+        for (let i = 0; i < this.state.hashes.length; i++){
+          if(ipfsResult === this.state.transaction[i].input){
+            if(this.state.account === this.state.transaction[i].address){
+              alert("exist file in blockchain and the owner is you")
+              return
+            }
+            alert("exist file in blockchain and the owner is " + this.state.transaction[i].address)
+            return
+          }
+        }
+        if(error){
+          console.log(error)
+          return
+        }
+        alert("file valid")
+        return
+      })
+    }
   }
 
   handleFileChange = (event) => {
@@ -117,37 +142,109 @@ class Dropzone extends Component{
     }
   }
 
-  onSubmit = (event) => {
+  onSubmit = async (event) => {
     event.preventDefault()
     if (this.state.buffer === null){
       alert("input file first")
       return
     }
-    ipfs.add(this.state.buffer, (error,result) => {
-      var ipfsResult = result[0].hash
-      for (let i = 0; i < this.state.hashes.length; i++){
-        if(ipfsResult === this.state.transaction[i].input){
-          if(this.state.account === this.state.transaction[i].address){
-            alert("exist file in blockchain and the owner is you")
+    if (this.state.fileName.split('.').pop() === "pdf"){
+      ipfs.add(this.state.buffer, async (error,result) => {
+        const url = 'https:ipfs.infura.io/ipfs/' + result[0].hash
+        for (let i = 0; i < this.state.hashes.length; i++){
+          if(url === this.state.transaction[i].initialIpfs){
+            if(this.state.account === this.state.transaction[i].address){
+              alert("exist file in blockchain and the owner is you")
+              return
+            }
+            alert("exist file in blockchain and the owner is " + this.state.transaction[i].address)
             return
           }
-          alert("exist file in blockchain and the owner is " + this.state.transaction[i].address)
+        }
+        if(error){
+          console.log(error)
           return
         }
-      }
-      if(error){
-        console.log(error)
-        return
-      }
-      this.state.contract.methods.mint(ipfsResult).send({ from: this.state.account}).once('receipt', (receipt) => {
-        var result = {address: this.state.account, transactionHash: receipt.transactionHash, input: ipfsResult, blockNumber: receipt.blockNumber, fileName: this.state.fileName}
-        this.setState({
-          hashes: [ipfsResult,...this.state.hashes],
-          transaction:[result, ...this.state.transaction]
+        const existingPdfBytes = await fetch(url).then(res => res.arrayBuffer())
+        const pdfDoc = await PDFDocument.load(existingPdfBytes)
+
+        const pngImageBytes = await fetch(logodark).then(res => res.arrayBuffer())
+        const pngImage = await pdfDoc.embedPng(pngImageBytes)
+        const pngDims = pngImage.scale(0.1)
+
+        const helveticaFont = await pdfDoc.embedFont(StandardFonts.Helvetica)
+        const pages = await pdfDoc.getPages()
+
+        const firstPage = pages[0]
+        const { width, height } = firstPage.getSize()
+
+        for (var i = 0; i < pages.length; i++){
+          pages[i].drawText('Validated by VBC Data Validate', {
+            x: width/4,
+            y: height - (height/4),
+            size: 30,
+            font: helveticaFont,
+            color: rgb(0.753, 0.753, 0.753),
+            rotate: degrees(-45),
+          })
+
+          pages[i].drawImage(pngImage, {
+            x: 20,
+            y: 20,
+            width: pngDims.width,
+            height: pngDims.height,
+          })
+
+        }
+        const pdfBytes = await pdfDoc.save()
+        const editedBuffer = Buffer(pdfBytes)
+        ipfs.add(editedBuffer, (error,result) => {
+          var ipfsResult = result[0].hash
+          if(error){
+            console.log(error)
+            return
+          }
+          this.state.contract.methods.mint(ipfsResult).send({ from: this.state.account}).once('receipt', (receipt) => {
+            var result = {address: this.state.account, transactionHash: receipt.transactionHash, input: ipfsResult, blockNumber: receipt.blockNumber, fileName: this.state.fileName, initialIpfs: url}
+            this.setState({
+              hashes: [ipfsResult,...this.state.hashes],
+              transaction:[result, ...this.state.transaction]
+            })
+            localStorage.setItem('Transaction', JSON.stringify(this.state.transaction))
+          })
         })
-        localStorage.setItem('Transaction', JSON.stringify(this.state.transaction))
+      })  
+    }
+    if (this.state.fileName.split('.').pop() === "png" || this.state.fileName.split('.').pop() === "jpg"){
+      ipfs.add(this.state.buffer, (error,result) => {
+        var ipfsResult = result[0].hash
+        for (let i = 0; i < this.state.hashes.length; i++){
+          if(ipfsResult === this.state.transaction[i].input){
+            if(this.state.account === this.state.transaction[i].address){
+              alert("exist file in blockchain and the owner is you")
+              return
+            }
+            alert("exist file in blockchain and the owner is " + this.state.transaction[i].address)
+            return
+          }
+        }
+        if(error){
+          console.log(error)
+          return
+        }
+        this.state.contract.methods.mint(ipfsResult).send({ from: this.state.account}).once('receipt', (receipt) => {
+          var result = {address: this.state.account, transactionHash: receipt.transactionHash, input: ipfsResult, blockNumber: receipt.blockNumber, fileName: this.state.fileName}
+          this.setState({
+            hashes: [ipfsResult,...this.state.hashes],
+            transaction:[result, ...this.state.transaction]
+          })
+          localStorage.setItem('Transaction', JSON.stringify(this.state.transaction))
+        })
       })
-    })
+    }
+    if(this.state.fileName.split('.').pop() !== "png" && this.state.fileName.split('.').pop() !== "jpg" && this.state.fileName.split('.').pop() !== "pdf"){
+      alert("Please choose pdf, png, jpg file")
+    }
   }
 
   render(){
@@ -185,8 +282,7 @@ class Dropzone extends Component{
                               </Row>
                               <hr width="100%" size= "5px" align="center"/>
                               <Row align="center">
-                                
-                                <p>{transaction.fileName.slice(0,20) + '...'}</p>
+                                <a target="_blank" rel="noopener noreferrer" href={'https:ipfs.infura.io/ipfs/' + transaction.input}>{transaction.fileName.slice(0,20)}</a>
                               </Row>
                             </CardBody>
                           </Card>
@@ -205,7 +301,7 @@ class Dropzone extends Component{
                               </Row>
                               <hr width="100%" size= "5px" align="center"/>
                               <Row align="center">
-                                <p>{transaction.fileName.slice(0,20) + '...'}</p>
+                                <a target="_blank" rel="noopener noreferrer" href={'https:ipfs.infura.io/ipfs/' + transaction.input}>{transaction.fileName.slice(0,20)}</a>
                               </Row>
                             </CardBody>
                           </Card>
